@@ -3,24 +3,25 @@ package api
 import (
 	"context"
 	"fmt"
-	"github.com/swaggo/swag"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
-
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"path"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/gomodule/redigo/redis"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/viper"
 	_ "github.com/stefanprodan/podinfo/pkg/api/docs"
 	"github.com/stefanprodan/podinfo/pkg/fscache"
-	"github.com/swaggo/http-swagger"
+	httpSwagger "github.com/swaggo/http-swagger"
+	"github.com/swaggo/swag"
 	"go.uber.org/zap"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 // @title Podinfo API
@@ -43,11 +44,6 @@ var (
 	watcher *fscache.Watcher
 )
 
-type FluxConfig struct {
-	GitUrl    string `mapstructure:"git-url"`
-	GitBranch string `mapstructure:"git-branch"`
-}
-
 type Config struct {
 	HttpClientTimeout         time.Duration `mapstructure:"http-client-timeout"`
 	HttpServerTimeout         time.Duration `mapstructure:"http-server-timeout"`
@@ -59,21 +55,30 @@ type Config struct {
 	UIPath                    string        `mapstructure:"ui-path"`
 	DataPath                  string        `mapstructure:"data-path"`
 	ConfigPath                string        `mapstructure:"config-path"`
+	CertPath                  string        `mapstructure:"cert-path"`
+	Host                      string        `mapstructure:"host"`
 	Port                      string        `mapstructure:"port"`
+	SecurePort                string        `mapstructure:"secure-port"`
 	PortMetrics               int           `mapstructure:"port-metrics"`
 	Hostname                  string        `mapstructure:"hostname"`
 	H2C                       bool          `mapstructure:"h2c"`
 	RandomDelay               bool          `mapstructure:"random-delay"`
+	RandomDelayUnit           string        `mapstructure:"random-delay-unit"`
+	RandomDelayMin            int           `mapstructure:"random-delay-min"`
+	RandomDelayMax            int           `mapstructure:"random-delay-max"`
 	RandomError               bool          `mapstructure:"random-error"`
 	Unhealthy                 bool          `mapstructure:"unhealthy"`
 	Unready                   bool          `mapstructure:"unready"`
 	JWTSecret                 string        `mapstructure:"jwt-secret"`
+	CacheServer               string        `mapstructure:"cache-server"`
 }
 
 type Server struct {
-	router *mux.Router
-	logger *zap.Logger
-	config *Config
+	router  *mux.Router
+	logger  *zap.Logger
+	config  *Config
+	pool    *redis.Pool
+	handler http.Handler
 }
 
 func NewServer(config *Config, logger *zap.Logger) (*Server, error) {
@@ -102,8 +107,11 @@ func (s *Server) registerHandlers() {
 	s.router.HandleFunc("/readyz/disable", s.disableReadyHandler).Methods("POST")
 	s.router.HandleFunc("/panic", s.panicHandler).Methods("GET")
 	s.router.HandleFunc("/status/{code:[0-9]+}", s.statusHandler).Methods("GET", "POST", "PUT").Name("status")
-	s.router.HandleFunc("/store", s.storeWriteHandler).Methods("POST")
+	s.router.HandleFunc("/store", s.storeWriteHandler).Methods("POST", "PUT")
 	s.router.HandleFunc("/store/{hash}", s.storeReadHandler).Methods("GET").Name("store")
+	s.router.HandleFunc("/cache/{key}", s.cacheWriteHandler).Methods("POST", "PUT")
+	s.router.HandleFunc("/cache/{key}", s.cacheDeleteHandler).Methods("DELETE")
+	s.router.HandleFunc("/cache/{key}", s.cacheReadHandler).Methods("GET").Name("cache")
 	s.router.HandleFunc("/configs", s.configReadHandler).Methods("GET")
 	s.router.HandleFunc("/token", s.tokenGenerateHandler).Methods("POST")
 	s.router.HandleFunc("/token/validate", s.tokenValidateHandler).Methods("GET")
@@ -134,7 +142,8 @@ func (s *Server) registerMiddlewares() {
 	s.router.Use(httpLogger.Handler)
 	s.router.Use(versionMiddleware)
 	if s.config.RandomDelay {
-		s.router.Use(randomDelayMiddleware)
+		randomDelayer := NewRandomDelayMiddleware(s.config.RandomDelayMin, s.config.RandomDelayMax, s.config.RandomDelayUnit)
+		s.router.Use(randomDelayer.Handler)
 	}
 	if s.config.RandomError {
 		s.router.Use(randomErrorMiddleware)
@@ -147,19 +156,10 @@ func (s *Server) ListenAndServe(stopCh <-chan struct{}) {
 	s.registerHandlers()
 	s.registerMiddlewares()
 
-	var handler http.Handler
 	if s.config.H2C {
-		handler = h2c.NewHandler(s.router, &http2.Server{})
+		s.handler = h2c.NewHandler(s.router, &http2.Server{})
 	} else {
-		handler = s.router
-	}
-
-	srv := &http.Server{
-		Addr:         ":" + s.config.Port,
-		WriteTimeout: s.config.HttpServerTimeout,
-		ReadTimeout:  s.config.HttpServerTimeout,
-		IdleTimeout:  2 * s.config.HttpServerTimeout,
-		Handler:      handler,
+		s.handler = s.router
 	}
 
 	//s.printRoutes()
@@ -175,12 +175,15 @@ func (s *Server) ListenAndServe(stopCh <-chan struct{}) {
 		}
 	}
 
-	// run server in background
-	go func() {
-		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-			s.logger.Fatal("HTTP server crashed", zap.Error(err))
-		}
-	}()
+	// start redis connection pool
+	ticker := time.NewTicker(30 * time.Second)
+	s.startCachePool(ticker, stopCh)
+
+	// create the http server
+	srv := s.startServer()
+
+	// create the secure server
+	secureSrv := s.startSecureServer()
 
 	// signal Kubernetes the server is ready to receive traffic
 	if !s.config.Unhealthy {
@@ -199,7 +202,12 @@ func (s *Server) ListenAndServe(stopCh <-chan struct{}) {
 	atomic.StoreInt32(&healthy, 0)
 	atomic.StoreInt32(&ready, 0)
 
-	s.logger.Info("Shutting down HTTP server", zap.Duration("timeout", s.config.HttpServerShutdownTimeout))
+	// close cache pool
+	if s.pool != nil {
+		_ = s.pool.Close()
+	}
+
+	s.logger.Info("Shutting down HTTP/HTTPS server", zap.Duration("timeout", s.config.HttpServerShutdownTimeout))
 
 	// wait for Kubernetes readiness probe to remove this instance from the load balancer
 	// the readiness check interval must be lower than the timeout
@@ -207,12 +215,80 @@ func (s *Server) ListenAndServe(stopCh <-chan struct{}) {
 		time.Sleep(3 * time.Second)
 	}
 
-	// attempt graceful shutdown
-	if err := srv.Shutdown(ctx); err != nil {
-		s.logger.Warn("HTTP server graceful shutdown failed", zap.Error(err))
-	} else {
-		s.logger.Info("HTTP server stopped")
+	// determine if the http server was started
+	if srv != nil {
+		if err := srv.Shutdown(ctx); err != nil {
+			s.logger.Warn("HTTP server graceful shutdown failed", zap.Error(err))
+		}
 	}
+
+	// determine if the secure server was started
+	if secureSrv != nil {
+		if err := secureSrv.Shutdown(ctx); err != nil {
+			s.logger.Warn("HTTPS server graceful shutdown failed", zap.Error(err))
+		}
+	}
+}
+
+func (s *Server) startServer() *http.Server {
+
+	// determine if the port is specified
+	if s.config.Port == "0" {
+
+		// move on immediately
+		return nil
+	}
+
+	srv := &http.Server{
+		Addr:         s.config.Host + ":" + s.config.Port,
+		WriteTimeout: s.config.HttpServerTimeout,
+		ReadTimeout:  s.config.HttpServerTimeout,
+		IdleTimeout:  2 * s.config.HttpServerTimeout,
+		Handler:      s.handler,
+	}
+
+	// start the server in the background
+	go func() {
+		s.logger.Info("Starting HTTP Server.", zap.String("addr", srv.Addr))
+		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+			s.logger.Fatal("HTTP server crashed", zap.Error(err))
+		}
+	}()
+
+	// return the server and routine
+	return srv
+}
+
+func (s *Server) startSecureServer() *http.Server {
+
+	// determine if the port is specified
+	if s.config.SecurePort == "0" {
+
+		// move on immediately
+		return nil
+	}
+
+	srv := &http.Server{
+		Addr:         s.config.Host + ":" + s.config.SecurePort,
+		WriteTimeout: s.config.HttpServerTimeout,
+		ReadTimeout:  s.config.HttpServerTimeout,
+		IdleTimeout:  2 * s.config.HttpServerTimeout,
+		Handler:      s.handler,
+	}
+
+	cert := path.Join(s.config.CertPath, "tls.crt")
+	key := path.Join(s.config.CertPath, "tls.key")
+
+	// start the server in the background
+	go func() {
+		s.logger.Info("Starting HTTPS Server.", zap.String("addr", srv.Addr))
+		if err := srv.ListenAndServeTLS(cert, key); err != http.ErrServerClosed {
+			s.logger.Fatal("HTTPS server crashed", zap.Error(err))
+		}
+	}()
+
+	// return the server
+	return srv
 }
 
 func (s *Server) startMetricsServer() {

@@ -3,12 +3,9 @@ kind: Pod
 metadata:
   name: {{ template "podinfo.fullname" . }}-grpc-test-{{ randAlphaNum 5 | lower }}
   labels:
-    heritage: {{ .Release.Service }}
-    release: {{ .Release.Name }}
-    chart: {{ .Chart.Name }}-{{ .Chart.Version }}
-    app: {{ template "podinfo.name" . }}
+    {{- include "podinfo.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": test
+    "helm.sh/hook": test-success
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
     sidecar.istio.io/inject: "false"
     linkerd.io/inject: disabled

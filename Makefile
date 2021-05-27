@@ -11,16 +11,21 @@ VERSION:=$(shell grep 'VERSION' pkg/version/version.go | awk '{ print $$4 }' | t
 EXTRA_RUN_ARGS?=
 
 run:
-	GO111MODULE=on go run -ldflags "-s -w -X github.com/stefanprodan/podinfo/pkg/version.REVISION=$(GIT_COMMIT)" cmd/podinfo/* \
+	go run -ldflags "-s -w -X github.com/stefanprodan/podinfo/pkg/version.REVISION=$(GIT_COMMIT)" cmd/podinfo/* \
 	--level=debug --grpc-port=9999 --backend-url=https://httpbin.org/status/401 --backend-url=https://httpbin.org/status/500 \
-	--ui-logo=https://raw.githubusercontent.com/stefanprodan/podinfo/gh-pages/cuddle_clap.gif --ui-color=#34577c $(EXTRA_RUN_ARGS)
+	--ui-logo=https://raw.githubusercontent.com/stefanprodan/podinfo/gh-pages/cuddle_clap.gif $(EXTRA_RUN_ARGS)
 
+.PHONY: test
 test:
-	GO111MODULE=on go test -v -race ./...
+	go test ./... -coverprofile cover.out
 
 build:
-	GO111MODULE=on GIT_COMMIT=$$(git rev-list -1 HEAD) && GO111MODULE=on CGO_ENABLED=0 go build  -ldflags "-s -w -X github.com/stefanprodan/podinfo/pkg/version.REVISION=$(GIT_COMMIT)" -a -o ./bin/podinfo ./cmd/podinfo/*
-	GO111MODULE=on GIT_COMMIT=$$(git rev-list -1 HEAD) && GO111MODULE=on CGO_ENABLED=0 go build  -ldflags "-s -w -X github.com/stefanprodan/podinfo/pkg/version.REVISION=$(GIT_COMMIT)" -a -o ./bin/podcli ./cmd/podcli/*
+	GIT_COMMIT=$$(git rev-list -1 HEAD) && CGO_ENABLED=0 go build  -ldflags "-s -w -X github.com/stefanprodan/podinfo/pkg/version.REVISION=$(GIT_COMMIT)" -a -o ./bin/podinfo ./cmd/podinfo/*
+	GIT_COMMIT=$$(git rev-list -1 HEAD) && CGO_ENABLED=0 go build  -ldflags "-s -w -X github.com/stefanprodan/podinfo/pkg/version.REVISION=$(GIT_COMMIT)" -a -o ./bin/podcli ./cmd/podcli/*
+
+fmt:
+	gofmt -l -s -w ./
+	goimports -l -w ./
 
 build-charts:
 	helm lint charts/*
@@ -28,6 +33,12 @@ build-charts:
 
 build-container:
 	docker build -t $(DOCKER_IMAGE_NAME):$(VERSION) .
+
+build-base:
+	docker build -f Dockerfile.base -t $(DOCKER_REPOSITORY)/podinfo-base:latest .
+
+push-base: build-base
+	docker push $(DOCKER_REPOSITORY)/podinfo-base:latest
 
 test-container:
 	@docker rm -f podinfo || true
@@ -50,9 +61,14 @@ version-set:
 	current="$(VERSION)" && \
 	sed -i '' "s/$$current/$$next/g" pkg/version/version.go && \
 	sed -i '' "s/tag: $$current/tag: $$next/g" charts/podinfo/values.yaml && \
+	sed -i '' "s/tag: $$current/tag: $$next/g" charts/podinfo/values-prod.yaml && \
 	sed -i '' "s/appVersion: $$current/appVersion: $$next/g" charts/podinfo/Chart.yaml && \
 	sed -i '' "s/version: $$current/version: $$next/g" charts/podinfo/Chart.yaml && \
 	sed -i '' "s/podinfo:$$current/podinfo:$$next/g" kustomize/deployment.yaml && \
+	sed -i '' "s/podinfo:$$current/podinfo:$$next/g" deploy/webapp/frontend/deployment.yaml && \
+	sed -i '' "s/podinfo:$$current/podinfo:$$next/g" deploy/webapp/backend/deployment.yaml && \
+	sed -i '' "s/podinfo:$$current/podinfo:$$next/g" deploy/bases/frontend/deployment.yaml && \
+	sed -i '' "s/podinfo:$$current/podinfo:$$next/g" deploy/bases/backend/deployment.yaml && \
 	echo "Version $$next set in code, deployment, chart and kustomize"
 
 release:
@@ -60,5 +76,5 @@ release:
 	git push origin $(VERSION)
 
 swagger:
-	GO111MODULE=on go get github.com/swaggo/swag/cmd/swag
+	go get github.com/swaggo/swag/cmd/swag
 	cd pkg/api && $$(go env GOPATH)/bin/swag init -g server.go

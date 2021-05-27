@@ -1,15 +1,20 @@
 # Podinfo
 
-Podinfo is a tiny web application made with Go 
+Podinfo is a tiny web application made with Go
 that showcases best practices of running microservices in Kubernetes.
+
+Podinfo is used by CNCF projects like [Flux](https://github.com/fluxcd/flux2)
+and [Flagger](https://github.com/fluxcd/flagger)
+for end-to-end testing and workshops.
 
 ## Installing the Chart
 
 To install the chart with the release name `my-release`:
 
 ```console
-$ helm repo add sp https://stefanprodan.github.io/podinfo
-$ helm upgrade my-release --install sp/podinfo 
+$ helm repo add podinfo https://stefanprodan.github.io/podinfo
+
+$ helm upgrade -i my-release podinfo/podinfo
 ```
 
 The command deploys podinfo on the Kubernetes cluster in the default namespace.
@@ -20,7 +25,7 @@ The [configuration](#configuration) section lists the parameters that can be con
 To uninstall/delete the `my-release` deployment:
 
 ```console
-$ helm delete --purge my-release
+$ helm delete my-release
 ```
 
 The command removes all the Kubernetes components associated with the chart and deletes the release.
@@ -29,60 +34,90 @@ The command removes all the Kubernetes components associated with the chart and 
 
 The following tables lists the configurable parameters of the podinfo chart and their default values.
 
-Parameter | Description | Default
+Parameter | Default | Description
 --- | --- | ---
-`affinity` | node/pod affinities | None
-`backend` | echo backend URL | None
-`backends` | echo backend URL array | None
-`faults.delay` | random HTTP response delays between 0 and 5 seconds | `false`
-`faults.error` | 1/3 chances of a random HTTP response error | `false`
-`faults.unhealthy` | when set, the healthy state is never reached | `false`
-`faults.unready` | when set, the ready state is never reached | `false`
-`hpa.enabled` | enables HPA | `false`
-`hpa.cpu` | target CPU usage per pod | None
-`hpa.memory` | target memory usage per pod | None
-`hpa.requests` | target requests per second per pod | None
-`hpa.maxReplicas` | maximum pod replicas | `10`
-`image.pullPolicy` | image pull policy | `IfNotPresent`
-`image.repository` | image repository | `stefanprodan/podinfo`
-`image.tag` | image tag | `<VERSION>`
-`ingress.enabled` | enables ingress | `false`
-`ingress.annotations` | ingress annotations | None
-`ingress.hosts` | ingress accepted hostnames | None
-`ingress.tls` | ingress TLS configuration | None
-`message` | UI greetings message | None
-`nodeSelector` | node labels for pod assignment | `{}`
-`replicaCount` | desired number of pods | `2`
-`resources.requests/cpu` | pod CPU request | `1m`
-`resources.requests/memory` | pod memory request | `16Mi`
-`resources.limits/cpu` | pod CPU limit | None
-`resources.limits/memory` | pod memory limit | None
-`service.enabled` | create Kubernetes service (should be disabled when using Flagger) | `true`
-`service.metricsPort` | Prometheus metrics endpoint port | `9797`
-`service.externalPort` | ClusterIP HTTP port | `9898`
-`service.httpPort` | container HTTP port | `9898`
-`service.nodePort` | NodePort for the HTTP endpoint | `31198`
-`service.grpcPort` | ClusterIP gPRC port | `9999`
-`service.grpcService` | gPRC service name | `podinfo`
-`service.type` | type of service | `ClusterIP`
-`tolerations` | list of node taints to tolerate | `[]`
-`serviceAccount.enabled` | specifies whether a service account should be created | `false`
-`serviceAccount.name` | the name of the service account to use, if not set and create is true, a name is generated using the fullname template | None
-`linkerd.profile.enabled` | create Linkerd service profile | `false`
+`replicaCount` | `1` | Desired number of pods
+`logLevel` | `info` | Log level: `debug`, `info`, `warn`, `error`
+`backend` | `None` | Echo backend URL
+`backends` | `[]` | Array of echo backend URLs
+`cache` | `None` | Redis address in the format `<host>:<port>`
+`redis.enabled` | `false` | Create Redis deployment for caching purposes
+`ui.color` | `#34577c` |  UI color
+`ui.message` | `None` |  UI greetings message
+`ui.logo` | `None` |  UI logo
+`faults.delay` | `false` | Random HTTP response delays between 0 and 5 seconds
+`faults.error` | `false` | 1/3 chances of a random HTTP response error
+`faults.unhealthy` | `false` | When set, the healthy state is never reached
+`faults.unready` | `false` | When set, the ready state is never reached
+`faults.testFail` | `false` | When set, a helm test is included which always fails
+`faults.testTimeout` | `false` | When set, a helm test is included which always times out
+`image.repository` | `stefanprodan/podinfo` | Image repository
+`image.tag` | `<VERSION>` | Image tag
+`image.pullPolicy` | `IfNotPresent` | Image pull policy
+`service.enabled` | `true` | Create a Kubernetes Service, should be disabled when using [Flagger](https://flagger.app)
+`service.type` | `ClusterIP` | Type of the Kubernetes Service
+`service.metricsPort` | `9797` | Prometheus metrics endpoint port
+`service.httpPort` | `9898` | Container HTTP port
+`service.externalPort` | `9898` | ClusterIP HTTP port
+`service.grpcPort` | `9999` | ClusterIP gPRC port
+`service.grpcService` | `podinfo` | gPRC service name
+`service.nodePort` | `31198` | NodePort for the HTTP endpoint
+`h2c.enabled` | `false` | Allow upgrading to h2c (non-TLS version of HTTP/2)
+`hpa.enabled` | `false` | Enables the Kubernetes HPA
+`hpa.maxReplicas` | `10` | Maximum amount of pods
+`hpa.cpu` | `None` | Target CPU usage per pod
+`hpa.memory` | `None` | Target memory usage per pod
+`hpa.requests` | `None` | Target HTTP requests per second per pod
+`serviceAccount.enabled` | `false` | Whether a service account should be created
+`serviceAccount.name` | `None` | The name of the service account to use, if not set and create is true, a name is generated using the fullname template
+`securityContext` | `{}` | The security context to be set on the podinfo container
+`linkerd.profile.enabled` | `false` | Create Linkerd service profile
+`serviceMonitor.enabled` | `false` | Whether a Prometheus Operator service monitor should be created
+`serviceMonitor.interval` | `15s` | Prometheus scraping interval
+`serviceMonitor.additionalLabels` | `{}` | Add additional labels to the service monitor |
+`ingress.enabled` | `false` | Enables Ingress
+`ingress.annotations` | `{}` | Ingress annotations
+`ingress.path` | `/*` | Ingress path
+`ingress.hosts` | `[]` | Ingress accepted hosts
+`ingress.tls` | `[]` | Ingress TLS configuration
+`resources.requests.cpu` | `1m` | Pod CPU request
+`resources.requests.memory` | `16Mi` | Pod memory request
+`resources.limits.cpu` | `None` | Pod CPU limit
+`resources.limits.memory` | `None` | Pod memory limit
+`nodeSelector` | `{}` | Node labels for pod assignment
+`tolerations` | `[]` | List of node taints to tolerate
+`affinity` | `None` | Node/pod affinities
+`podAnnotations` | `{}` | Pod annotations
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example,
 
 ```console
-$ helm install stable/podinfo --name my-release \
-  --set=image.tag=0.0.2,service.type=NodePort
+$ helm install my-release podinfo/podinfo \
+  --set=serviceMonitor.enabled=true,serviceMonitor.interval=5s
+```
+
+To add custom annotations you need to escape the annotation key string:
+
+```console
+$ helm upgrade -i my-release podinfo/podinfo \
+--set podAnnotations."appmesh\.k8s\.aws\/preview"=enabled
 ```
 
 Alternatively, a YAML file that specifies the values for the above parameters can be provided while installing the chart. For example,
 
 ```console
-$ helm install stable/podinfo --name my-release -f values.yaml
+$ helm install my-release podinfo/podinfo -f values.yaml
 ```
 
 > **Tip**: You can use the default [values.yaml](values.yaml)
-```
 
+## Upgrading the chart
+
+### To =< 5.0.0
+
+Version 5.0.0 is a major update.
+
+* The chart now follows the new Kubernetes label recommendations:
+<https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/>
+
+The simplest way to update is to do a force upgrade, which recreates the resources by doing a delete and an install.
