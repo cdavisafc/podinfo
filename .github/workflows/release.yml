@@ -18,12 +18,6 @@ jobs:
         uses: docker/setup-buildx-action@v1
         with:
           buildkitd-flags: "--debug"
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v1
-        with:
-          registry: ghcr.io
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.GHCR_TOKEN }}
       - name: Login to Docker Hub
         uses: docker/login-action@v1
         with:
@@ -47,9 +41,9 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm/v7,linux/arm64
           tags: |
-            docker.io/stefanprodan/podinfo:${{ steps.prep.outputs.VERSION }}
-            docker.io/stefanprodan/podinfo:latest
-            ghcr.io/stefanprodan/podinfo:${{ steps.prep.outputs.VERSION }}
+            docker.io/cdavisafc/podinfo:${{ steps.prep.outputs.VERSION }}
+            docker.io/cdavisafc/podinfo:latest
+            ghcr.io/cdavisafc/podinfo:${{ steps.prep.outputs.VERSION }}
           labels: |
             org.opencontainers.image.title=${{ github.event.repository.name }}
             org.opencontainers.image.description=${{ github.event.repository.description }}
@@ -66,20 +60,4 @@ jobs:
           context: .
           platforms: linux/amd64
           file: ./Dockerfile.base
-          tags: docker.io/stefanprodan/podinfo-base:latest
-      - name: Publish helm chart
-        uses: stefanprodan/helm-gh-pages@master
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: ./.github/actions/release-notes
-      - name: Generate release notes
-        run: |
-          echo 'CHANGELOG' > /tmp/release.txt
-          github-release-notes -org stefanprodan -repo podinfo -since-latest-release >> /tmp/release.txt
-      - name: Publish release
-        uses: goreleaser/goreleaser-action@v1
-        with:
-          version: latest
-          args: release --release-notes=/tmp/release.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tags: docker.io/cdavisafc/podinfo-base:latest
