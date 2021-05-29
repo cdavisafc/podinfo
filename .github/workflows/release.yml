@@ -51,12 +51,3 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.prep.outputs.VERSION }}
             org.opencontainers.image.created=${{ steps.prep.outputs.BUILD_DATE }}
-      - name: Publish base image
-        uses: docker/build-push-action@v2
-        with:
-          push: true
-          builder: ${{ steps.buildx.outputs.name }}
-          context: .
-          platforms: linux/amd64
-          file: ./Dockerfile.base
-          tags: docker.io/cdavisafc/podinfo-base:latest
