@@ -2,8 +2,7 @@ name: release
 
 on:
   push:
-    branches:
-      - demo
+    tags: '*'
 
 jobs:
   release:
