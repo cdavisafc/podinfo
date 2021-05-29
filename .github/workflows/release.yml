@@ -43,7 +43,6 @@ jobs:
           tags: |
             docker.io/cdavisafc/podinfo:${{ steps.prep.outputs.VERSION }}
             docker.io/cdavisafc/podinfo:latest
-            ghcr.io/cdavisafc/podinfo:${{ steps.prep.outputs.VERSION }}
           labels: |
             org.opencontainers.image.title=${{ github.event.repository.name }}
             org.opencontainers.image.description=${{ github.event.repository.description }}
